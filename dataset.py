@@ -7,11 +7,15 @@ import os
 
 
 # Function converting np read audio to range of -1 to +1
+# Function converting np read audio to range of -1 to +1
 def audio_converter(audio):
     if audio.dtype == 'int16':
         return audio.astype(np.float32, order='C') / 32768.0
+    elif audio.dtype == 'float32':
+        return audio.astype(np.float32)
     else:
-        print('unimplemented audio data type conversion...')
+        raise ValueError(f"Unsupported audio data type: {audio.dtype}")
+
 
 
 # Splits audio, each split marker determines the fraction of the total audio in that split, i.e [0.75, 0.25] will put
@@ -74,34 +78,43 @@ class DataSet:
     # load a file of 'filename' into existing subset/s 'set_names', split fractionally as specified by 'splits',
     # if 'cond_val' is provided the conditioning value will be saved along with the frames of the loaded data
     def load_file(self, filename, set_names='train', splits=None, cond_val=None):
-        # Assertions and checks
+        """
+        Load data from specified train/val/test sets based on the desired file structure.
+        Expected structure:
+        data/train/{filename}_input.wav
+        data/train/{filename}_target.wav
+        """
         if type(set_names) == str:
             set_names = [set_names]
-        assert len(set_names) == 1 or len(set_names) == len(splits), "number of subset names must equal number of " \
-                                                                     "split markers"
-        assert [self.subsets.get(each) for each in set_names], "set_names contains subsets that don't exist yet"
 
-        # Load each of the 'extensions'
-        for i, ext in enumerate(self.extensions):
+        # Ensure the set names are valid
+        assert [self.subsets.get(each) for each in set_names], \
+            "Set_names contains subsets that don't exist yet"
+
+        for set_name in set_names:
+            # Construct paths for input and target files
+            input_file = os.path.join(self.data_dir, set_name, f"{filename}_input.wav")
+            target_file = os.path.join(self.data_dir, set_name, f"{filename}_target.wav")
+
             try:
-                file_loc = os.path.join(self.data_dir, filename + '-' + ext)
-                file_loc = file_loc + '.wav' if not file_loc.endswith('.wav') else file_loc
-                np_data = wavfile.read(file_loc)
-            except FileNotFoundError:
-                file_loc = os.path.join(self.data_dir, filename + ext)
-                file_loc = file_loc + '.wav' if not file_loc.endswith('.wav') else file_loc
-                np_data = wavfile.read(file_loc)
-            except FileNotFoundError:
-                print(["File Not Found At: " + self.data_dir + filename])
+                input_fs, input_data = wavfile.read(input_file)
+                print(f"Loaded {input_file}, dtype: {input_data.dtype}, shape: {input_data.shape}")
+                target_fs, target_data = wavfile.read(target_file)
+                print(f"Loaded {target_file}, dtype: {target_data.dtype}, shape: {target_data.shape}")
+            except FileNotFoundError as e:
+                print(f"File not found: {e.filename}")
                 return
-            raw_audio = audio_converter(np_data[1])
-            # Split the audio if the set_names were provided
-            if len(set_names) > 1:
-                raw_audio = audio_splitter(raw_audio, splits)
-                for n, sets in enumerate(set_names):
-                    self.subsets[set_names[n]].add_data(np_data[0], raw_audio[n], ext, cond_val)
-            elif len(set_names) == 1:
-                self.subsets[set_names[0]].add_data(np_data[0], raw_audio, ext, cond_val)
+
+            # Check sample rates
+            assert input_fs == target_fs, "Input and target sample rates must match."
+
+            # Convert audio data to the appropriate format
+            input_audio = audio_converter(input_data)
+            target_audio = audio_converter(target_data)
+
+            # Add data to the subset
+            self.subsets[set_name].add_data(input_fs, input_audio, 'input', cond_val)
+            self.subsets[set_name].add_data(target_fs, target_audio, 'target', cond_val)
 
 
 # The SubSet class holds a subset of data,
