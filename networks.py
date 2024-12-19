@@ -67,45 +67,55 @@ class SimpleRNN(nn.Module):
 
     # train_epoch runs one epoch of training
     def train_epoch(self, input_data, target_data, loss_fcn, optim, bs, init_len=200, up_fr=1000):
-        # shuffle the segments at the start of the epoch
+        # Get the device of the model
+        device = next(self.parameters()).device
+
+        # Shuffle the segments at the start of the epoch
         shuffle = torch.randperm(input_data.shape[1])
 
         # Iterate over the batches
         ep_loss = 0
         for batch_i in range(math.ceil(shuffle.shape[0] / bs)):
-            # Load batch of shuffled segments
-            input_batch = input_data[:, shuffle[batch_i * bs:(batch_i + 1) * bs], :]
-            target_batch = target_data[:, shuffle[batch_i * bs:(batch_i + 1) * bs], :]
+            # Load batch of shuffled segments and move them to the correct device
+            input_batch = input_data[:, shuffle[batch_i * bs:(batch_i + 1) * bs], :].to(device)
+            target_batch = target_data[:, shuffle[batch_i * bs:(batch_i + 1) * bs], :].to(device)
 
-            # Initialise network hidden state by processing some samples then zero the gradient buffers
-            self(input_batch[0:init_len, :, :])
+            # Ensure the initial segment is also on the correct device
+            input_init = input_batch[0:init_len, :, :].to(device)
+
+            # Initialise network hidden state by processing some samples
+            self(input_init)
             self.zero_grad()
 
-            # Choose the starting index for processing the rest of the batch sequence, in chunks of args.up_fr
+            # Process the rest of the batch
             start_i = init_len
             batch_loss = 0
-            # Iterate over the remaining samples in the mini batch
             for k in range(math.ceil((input_batch.shape[0] - init_len) / up_fr)):
-                # Process input batch with neural network
-                output = self(input_batch[start_i:start_i + up_fr, :, :])
+                # Process input batch with the neural network
+                batch_input = input_batch[start_i:start_i + up_fr, :, :].to(device)
+                batch_target = target_batch[start_i:start_i + up_fr, :, :].to(device)
+
+                output = self(batch_input)
 
                 # Calculate loss and update network parameters
-                loss = loss_fcn(output, target_batch[start_i:start_i + up_fr, :, :])
+                loss = loss_fcn(output, batch_target)
                 loss.backward()
                 optim.step()
 
-                # Set the network hidden state, to detach it from the computation graph
+                # Detach the hidden state to prevent gradient accumulation across batches
                 self.detach_hidden()
                 self.zero_grad()
 
-                # Update the start index for the next iteration and add the loss to the batch_loss total
+                # Update batch loss
                 start_i += up_fr
-                batch_loss += loss
+                batch_loss += loss.item()
 
-            # Add the average batch loss to the epoch loss and reset the hidden states to zeros
+            # Update epoch loss and reset hidden states
             ep_loss += batch_loss / (k + 1)
             self.reset_hidden()
+
         return ep_loss / (batch_i + 1)
+
 
     # only proc processes a the input data and calculates the loss, optionally grad can be tracked or not
     def process_data(self, input_data, target_data, loss_fcn, chunk, grad=False):
